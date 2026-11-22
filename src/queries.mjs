@@ -71,11 +71,16 @@ function weekOf(ms) { const d = new Date(ms); const t = Date.UTC(d.getUTCFullYea
 export function humanMinutes(db, { idle = IDLE_MIN, repo, by } = {}) {
   const idleMs = idle * 60000;
   const perPr = new Map();
-  const get = (k) => perPr.get(k) || perPr.set(k, { pr: k, iv: [], flagged: [], prompts: 0, approvals: 0, rejections: 0, interruptions: 0, promptMin: 0, first: null, last: null, sessions: new Set() }).get(k);
+  const get = (k) => perPr.get(k) || perPr.set(k, { pr: k, iv: [], eq: 0, flagged: [], prompts: 0, approvals: 0, rejections: 0, interruptions: 0, promptMin: 0, first: null, last: null, sessions: new Set() }).get(k);
   for (const m of missions(db, { repo })) {
     for (const sid of m.sessions) {
-      const { ev, out } = sessionIntervals(db, sid, idleMs);
-      for (const x of out) { const p = get(x.key); p.iv.push([x.s, x.e]); if (x.flag) p.flagged.push([x.s, x.e]); }
+      const { ev, out, distinct } = sessionIntervals(db, sid, idleMs);
+      for (const x of out) {
+        const p = get(x.key); p.iv.push([x.s, x.e]); if (x.flag) p.flagged.push([x.s, x.e]);
+        // sensitivity: equal split across every PR the session links
+        const targets = distinct.size > 1 ? [...distinct] : [x.key];
+        for (const k of targets) get(k).eq += (x.e - x.s) / 60000 / targets.length;
+      }
       // proxies and wall clock are attributed to the PR in force at the event
       const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: `${e.pr_repo}#${e.pr_num}` }));
       for (const e of ev) {
@@ -94,7 +99,7 @@ export function humanMinutes(db, { idle = IDLE_MIN, repo, by } = {}) {
   const rows = [...perPr.values()].map((p) => {
     const s = snap.get(p.pr);
     return { pr: p.pr, merged: s ? (s.merged_at ? true : false) : null, sessions: p.sessions.size,
-      active_min: round(total(p.iv)), flagged_min: round(total(p.flagged)),
+      active_min: round(total(p.iv)), equal_split_min: round(p.eq), flagged_min: round(total(p.flagged)),
       prompts: p.prompts, approvals: p.approvals, rejections: p.rejections, interruptions: p.interruptions,
       prompt_weighted_min: round(p.promptMin), wall_clock_min: p.first == null ? 0 : round((p.last - p.first) / 60000),
       week: p.last ? weekOf(p.last) : null };
@@ -112,6 +117,9 @@ export function humanMinutes(db, { idle = IDLE_MIN, repo, by } = {}) {
     proxies: { prompts_per_pr: denom.length ? round(sum(denom, 'prompts') / denom.length) : null,
       prompt_weighted_min_per_pr: denom.length ? round(sum(denom, 'prompt_weighted_min') / denom.length) : null,
       wall_clock_min_per_pr: denom.length ? round(sum(denom, 'wall_clock_min') / denom.length) : null },
+    equal_split_sensitivity: { active_min_per_pr: denom.length ? round(sum(denom, 'equal_split_min') / denom.length) : null,
+      trimmed_mean_active_min: round(trimmedMean(denom.map((r) => r.equal_split_min), 0.1)),
+      note: 'a session that links several PRs is split equally across them; no union across sessions, so a slight overcount' },
     no_pr_active_min: round(sum(rows.filter((r) => r.pr === 'no-pr'), 'active_min'))
   };
   if (by === 'week') {

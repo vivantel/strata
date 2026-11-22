@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { open } from '../src/db.mjs';
 import { ingest } from '../src/ingest.mjs';
 import { humanMinutes, interventions, coverage, exportCounts, missions } from '../src/queries.mjs';
+import { verify, sample, canary } from '../src/checks.mjs';
 
 const args = process.argv.slice(2);
 const cmd = args.shift();
@@ -27,13 +28,21 @@ const help = `strata <command>
   query missions [--repo R]
   snapshot --file prs.json | --gh REPO   merge state per PR (the only network use is --gh)
   export [--repo R]                      counts and flags only, no message text
-  status`;
+  verify                                 every log line has an event, or is a counted duplicate
+  canary [--days N]                      exit 1 if recent logs hold an unclassified event type (format drift)
+  sample [--n 20] [--repo R]             ids and counts for the owner's hand check, no text
+  status
+
+Archive of every user's logs on this box: sudo sh scripts/archive.sh, then ingest --root <archive>.`;
 
 if (!cmd || cmd === 'help' || opt.help) { console.log(help); process.exit(cmd ? 0 : 1); }
 const db = open(dbPath);
 if (cmd === 'ingest') out(ingest(db, root));
 else if (cmd === 'coverage') out(coverage(db));
 else if (cmd === 'status') out({ db: dbPath, events: db.prepare('SELECT count(*) n FROM events').get().n, files: db.prepare('SELECT count(*) n FROM files').get().n, rotated: db.prepare("SELECT count(*) n FROM files WHERE status='rotated'").get().n });
+else if (cmd === 'verify') out(verify(db));
+else if (cmd === 'sample') out(sample(db, { n: Number(opt.n || 20), repo: opt.repo }));
+else if (cmd === 'canary') { const r = canary(db, { days: Number(opt.days || 14) }); out(r); if (!r.ok) process.exit(1); }
 else if (cmd === 'export') out(exportCounts(db, { repo: opt.repo }));
 else if (cmd === 'query') {
   const name = pos[0];
