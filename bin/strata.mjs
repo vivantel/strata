@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { open } from '../src/db.mjs';
+import { ingest } from '../src/ingest.mjs';
+import { humanMinutes, interventions, coverage, exportCounts, missions } from '../src/queries.mjs';
+
+const args = process.argv.slice(2);
+const cmd = args.shift();
+const opt = {};
+const pos = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i].startsWith('--')) { const k = args[i].slice(2); const v = args[i + 1] && !args[i + 1].startsWith('--') ? args[++i] : true; opt[k] = v; } else pos.push(args[i]);
+}
+const home = homedir();
+const dbPath = opt.db || join(process.env.XDG_DATA_HOME || join(home, '.local/share'), 'strata/index.sqlite');
+const root = opt.root || join(home, '.claude/projects');
+const out = (x) => console.log(JSON.stringify(x, null, 2));
+
+const help = `strata <command>
+  ingest [--root DIR] [--db FILE]        read Claude Code logs into the local index (incremental)
+  coverage                               every event type: classified, ignored or UNKNOWN
+  query human-minutes-per-merged-pr [--repo R] [--idle-min N] [--by week] [--rows]
+  query interventions-per-100-calls [--repo R]
+  query missions [--repo R]
+  snapshot --file prs.json | --gh REPO   merge state per PR (the only network use is --gh)
+  export [--repo R]                      counts and flags only, no message text
+  status`;
+
+if (!cmd || cmd === 'help' || opt.help) { console.log(help); process.exit(cmd ? 0 : 1); }
+const db = open(dbPath);
+if (cmd === 'ingest') out(ingest(db, root));
+else if (cmd === 'coverage') out(coverage(db));
+else if (cmd === 'status') out({ db: dbPath, events: db.prepare('SELECT count(*) n FROM events').get().n, files: db.prepare('SELECT count(*) n FROM files').get().n, rotated: db.prepare("SELECT count(*) n FROM files WHERE status='rotated'").get().n });
+else if (cmd === 'export') out(exportCounts(db, { repo: opt.repo }));
+else if (cmd === 'query') {
+  const name = pos[0];
+  if (name === 'human-minutes-per-merged-pr') {
+    const idle = opt['idle-min'] ? Number(opt['idle-min']) : 5;
+    const r = humanMinutes(db, { idle, repo: opt.repo, by: opt.by });
+    const others = [2, 5, 15].filter((x) => x !== idle).map((x) => { const s = humanMinutes(db, { idle: x, repo: opt.repo }).summary; return { idle_min: x, active_min_per_pr: s.active_min_per_pr, trimmed_mean_active_min: s.trimmed_mean_active_min }; });
+    out(opt.rows ? { ...r, sensitivity: others } : { summary: r.summary, sensitivity: others });
+  } else if (name === 'interventions-per-100-calls') out(interventions(db, { repo: opt.repo }));
+  else if (name === 'missions') out(missions(db, { repo: opt.repo }).map((m) => ({ id: m.id, sessions: m.sessions.length, joins: m.joins })));
+  else { console.error(`unknown query ${name}\n${help}`); process.exit(2); }
+} else if (cmd === 'snapshot') {
+  let list;
+  if (opt.file) list = JSON.parse(readFileSync(opt.file, 'utf8'));
+  else if (opt.gh) {
+    const raw = execFileSync('gh', ['pr', 'list', '-R', opt.gh, '--state', 'all', '--limit', '1000', '--json', 'number,state,additions,deletions,mergedAt'], { encoding: 'utf8' });
+    list = JSON.parse(raw).map((p) => ({ repo: opt.gh, ...p }));
+  } else { console.error('snapshot needs --file or --gh'); process.exit(2); }
+  const ins = db.prepare('INSERT OR REPLACE INTO prs(repo,num,state,additions,deletions,merged_at,ci,reverted) VALUES(?,?,?,?,?,?,?,?)');
+  for (const p of list) ins.run(p.repo, p.number, p.state ?? null, p.additions ?? null, p.deletions ?? null, p.mergedAt ? Date.parse(p.mergedAt) : null, p.ci ?? null, p.reverted ? 1 : 0);
+  out({ prs: list.length });
+} else { console.error(help); process.exit(2); }

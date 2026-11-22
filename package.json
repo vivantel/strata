@@ -1,0 +1,10 @@
+{
+  "name": "strata",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Local lossless index of agent sessions; reads the ecosystem outcome meters",
+  "bin": { "strata": "bin/strata.mjs" },
+  "engines": { "node": ">=22.13" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}
