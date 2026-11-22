@@ -21,9 +21,9 @@ export function verify(db) {
 }
 
 // Rows for the hand check (S2): ids and counts only, never text. Multi-PR missions are oversampled.
-export function sample(db, { n = 20, seed = 7, repo } = {}) {
+export function sample(db, { n = 20, seed = 7, repo, user } = {}) {
   let s = seed; const rnd = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
-  const ms = missions(db, { repo }).map((m) => {
+  const ms = missions(db, { repo, user }).map((m) => {
     const r = db.prepare(`SELECT count(*) n, min(ts) a, max(ts) b, sum(owner_prompt) p,
         count(DISTINCT CASE WHEN pr_num IS NOT NULL THEN pr_repo||'#'||pr_num END) prs
       FROM events WHERE session_id IN (${m.sessions.map(() => '?').join(',')})`).get(...m.sessions);

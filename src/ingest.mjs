@@ -27,12 +27,14 @@ export function ingestFile(db, path) {
   let { size, prefix, buf } = readRange(path, from, rec ? rec.prefix_len : PREFIX);
   if (rec && (size < rec.size || (rec.prefix_len > 0 && prefix !== rec.prefix_hash))) {
     // rewritten or truncated: drop this file's events and read it again
+    db.prepare('DELETE FROM raw_events WHERE event_id IN (SELECT id FROM events WHERE file=?)').run(path);
     db.prepare('DELETE FROM events WHERE file=?').run(path);
     from = 0; lineBase = 0; ({ size, prefix, buf } = readRange(path, 0));
   } else if (rec && size === rec.size && from === rec.byte_offset) return { added: 0, lines: 0 };
   const ins = db.prepare(`INSERT OR IGNORE INTO events(file,line_no,byte_offset,session_id,uuid,hash,type,kind,ts,sidechain,branch,cwd,
-    owner_prompt,prompt_len,interrupted,n_tool_use,tool_use_ids,rejected,perm,hook_err,pr_repo,pr_num,link_to,raw)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    owner_prompt,prompt_len,interrupted,n_tool_use,tool_use_ids,rejected,perm,hook_err,pr_repo,pr_num,link_to)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insRaw = db.prepare('INSERT INTO raw_events(event_id, raw) VALUES(?, ?)');
   const lastNl = buf.lastIndexOf(0x0a);
   const complete = lastNl < 0 ? 0 : lastNl + 1; // a partial last line waits for the next ingest
   let added = 0, lines = 0, pos = 0;
@@ -53,8 +55,8 @@ export function ingestFile(db, path) {
         if (!row.session_id) row.session_id = sessionFromPath(path);
         const r = ins.run(path, lineBase + lines, from + pos, row.session_id, row.uuid, sha(raw), row.type, row.kind, row.ts, row.sidechain,
           row.branch, row.cwd, row.owner_prompt, row.prompt_len, row.interrupted, row.n_tool_use, row.tool_use_ids, row.rejected,
-          row.perm, row.hook_err, row.pr_repo, row.pr_num, row.link_to, raw);
-        added += Number(r.changes);
+          row.perm, row.hook_err, row.pr_repo, row.pr_num, row.link_to);
+        if (Number(r.changes)) { insRaw.run(r.lastInsertRowid, raw); added++; }
       }
       pos = end + 1;
     }

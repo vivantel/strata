@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS events(
   sidechain INTEGER, branch TEXT, cwd TEXT,
   owner_prompt INTEGER, prompt_len INTEGER, interrupted INTEGER,
   n_tool_use INTEGER, tool_use_ids TEXT, rejected INTEGER, perm TEXT, hook_err INTEGER,
-  pr_repo TEXT, pr_num INTEGER, link_to TEXT, raw TEXT);
+  pr_repo TEXT, pr_num INTEGER, link_to TEXT);
+CREATE TABLE IF NOT EXISTS raw_events(event_id INTEGER PRIMARY KEY, raw TEXT);  -- kept apart so scans over events stay small
+CREATE INDEX IF NOT EXISTS ev_file ON events(file);
 CREATE UNIQUE INDEX IF NOT EXISTS ev_dedupe ON events(session_id, ifnull(uuid,''), hash);
 CREATE INDEX IF NOT EXISTS ev_session ON events(session_id, ts);
 CREATE TABLE IF NOT EXISTS prs(repo TEXT, num INTEGER, state TEXT, additions INTEGER,

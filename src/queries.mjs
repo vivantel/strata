@@ -7,10 +7,14 @@ export const PROMPT_SEC_PER_20 = 1; // ... plus 1 s per 20 characters ...
 export const PROMPT_CAP_MIN = 5;    // ... capped
 
 // ---- missions: sessions joined by structured links (design amendment 1) ----
-export function missions(db, { repo } = {}) {
+export function missions(db, { repo, user } = {}) {
   const sess = new Map(); // id -> {repo, branch}
   for (const r of db.prepare(`SELECT session_id s, max(cwd) cwd, max(CASE WHEN branch IS NOT NULL THEN branch END) br
       FROM events WHERE session_id IS NOT NULL GROUP BY session_id`).all()) sess.set(r.s, { cwd: r.cwd, branch: r.br });
+  if (user) { // the archive keeps each account's logs apart: archive/<user>/...
+    const mine = new Set(db.prepare('SELECT DISTINCT session_id s FROM events WHERE file LIKE ?').all(`%/archive/${user}/%`).map((r) => r.s));
+    for (const id of [...sess.keys()]) if (!mine.has(id)) sess.delete(id);
+  }
   const parent = new Map([...sess.keys()].map((k) => [k, k]));
   const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
   const causes = new Map();
@@ -47,17 +51,24 @@ function merge(iv) {
 }
 const total = (iv) => merge(iv).reduce((a, [s, e]) => a + (e - s), 0) / 60000;
 
+// The PR in force at time t: the most recent earlier link, else the first. Call with non-decreasing t.
+function linkCursor(links) {
+  let i = -1;
+  return (t) => { while (i + 1 < links.length && links[i + 1].ts <= t) i++; return (i >= 0 ? links[i] : links[0]).key; };
+}
+
 // Per-session PR attribution: interval -> PR in force (most recent earlier pr-link, else first link).
 function sessionIntervals(db, sid, idleMs) {
   const ev = db.prepare('SELECT ts,type,pr_repo,pr_num,owner_prompt,prompt_len,interrupted,rejected,perm FROM events WHERE session_id=? AND ts IS NOT NULL ORDER BY ts').all(sid);
   const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: `${e.pr_repo}#${e.pr_num}` }));
   const distinct = new Set(links.map((l) => l.key));
   const out = [];
+  const at = linkCursor(links);
   for (let i = 1; i < ev.length; i++) {
     const a = ev[i - 1].ts, b = ev[i].ts; if (b - a > idleMs || b <= a) continue;
     let key = 'no-pr', flag = false;
     if (links.length) {
-      const earlier = links.filter((l) => l.ts <= a); key = (earlier.length ? earlier[earlier.length - 1] : links[0]).key;
+      key = at(a);
       flag = distinct.size > 1; // work before the first link is normal (the PR is opened last), not ambiguous
     }
     out.push({ s: a, e: b, key, flag });
@@ -68,11 +79,11 @@ function sessionIntervals(db, sid, idleMs) {
 function weekOf(ms) { const d = new Date(ms); const t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()); const dow = (new Date(t).getUTCDay() + 6) % 7; return new Date(t - dow * 86400000).toISOString().slice(0, 10); }
 
 // human-minutes-per-merged-pr: per PR, idle-gap union plus the side-by-side proxies.
-export function humanMinutes(db, { idle = IDLE_MIN, repo, by } = {}) {
+export function humanMinutes(db, { idle = IDLE_MIN, repo, user, by } = {}) {
   const idleMs = idle * 60000;
   const perPr = new Map();
   const get = (k) => perPr.get(k) || perPr.set(k, { pr: k, iv: [], eq: 0, flagged: [], prompts: 0, approvals: 0, rejections: 0, interruptions: 0, promptMin: 0, first: null, last: null, sessions: new Set() }).get(k);
-  for (const m of missions(db, { repo })) {
+  for (const m of missions(db, { repo, user })) {
     for (const sid of m.sessions) {
       const { ev, out, distinct } = sessionIntervals(db, sid, idleMs);
       for (const x of out) {
@@ -83,9 +94,9 @@ export function humanMinutes(db, { idle = IDLE_MIN, repo, by } = {}) {
       }
       // proxies and wall clock are attributed to the PR in force at the event
       const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: `${e.pr_repo}#${e.pr_num}` }));
+      const at = linkCursor(links);
       for (const e of ev) {
-        let key = 'no-pr';
-        if (links.length) { const earlier = links.filter((l) => l.ts <= e.ts); key = (earlier.length ? earlier[earlier.length - 1] : links[0]).key; }
+        const key = links.length ? at(e.ts) : 'no-pr';
         const p = get(key); p.sessions.add(sid);
         p.first = p.first == null ? e.ts : Math.min(p.first, e.ts); p.last = p.last == null ? e.ts : Math.max(p.last, e.ts);
         if (e.owner_prompt) { p.prompts++; p.promptMin += Math.min(PROMPT_CAP_MIN, PROMPT_FLOOR_MIN + (e.prompt_len / 20) * PROMPT_SEC_PER_20 / 60); }
@@ -129,9 +140,9 @@ export function humanMinutes(db, { idle = IDLE_MIN, repo, by } = {}) {
   return { summary, rows };
 }
 
-export function interventions(db, { repo, seed = 1 } = {}) {
+export function interventions(db, { repo, user, seed = 1 } = {}) {
   const per = new Map();
-  for (const m of missions(db, { repo })) for (const sid of m.sessions) {
+  for (const m of missions(db, { repo, user })) for (const sid of m.sessions) {
     const rows = db.prepare('SELECT tool_use_ids,rejected,perm,hook_err,interrupted FROM events WHERE session_id=?').all(sid);
     const ids = new Set(); let sig = 0;
     for (const r of rows) {

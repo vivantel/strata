@@ -72,7 +72,7 @@ test('re-ordered and truncated logs: a rewritten file replaces its events', () =
 test('events round-trip to their source line', () => {
   const { root, db } = setup();
   ingest(db, root);
-  const row = db.prepare("SELECT raw, line_no FROM events WHERE uuid='a2'").get();
+  const row = db.prepare("SELECT r.raw, e.line_no FROM events e JOIN raw_events r ON r.event_id=e.id WHERE e.uuid='a2'").get();
   assert.equal(JSON.parse(row.raw).uuid, 'a2');
   assert.equal(row.line_no, 5);
 });

@@ -23,7 +23,7 @@ const out = (x) => console.log(JSON.stringify(x, null, 2));
 const help = `strata <command>
   ingest [--root DIR] [--db FILE]        read Claude Code logs into the local index (incremental)
   coverage                               every event type: classified, ignored or UNKNOWN
-  query human-minutes-per-merged-pr [--repo R] [--idle-min N] [--by week] [--rows]
+  query human-minutes-per-merged-pr [--repo R] [--user U] [--idle-min N] [--by week] [--rows]
   query interventions-per-100-calls [--repo R]
   query missions [--repo R]
   snapshot --file prs.json | --gh REPO   merge state per PR (the only network use is --gh)
@@ -37,22 +37,26 @@ Archive of every user's logs on this box: sudo sh scripts/archive.sh, then inges
 
 if (!cmd || cmd === 'help' || opt.help) { console.log(help); process.exit(cmd ? 0 : 1); }
 const db = open(dbPath);
+if (!opt.user && ['query', 'export', 'sample'].includes(cmd)) {
+  const users = db.prepare("SELECT DISTINCT substr(path, instr(path,'/archive/')+9, instr(substr(path, instr(path,'/archive/')+9),'/')-1) u FROM files WHERE path LIKE '%/archive/%'").all().map((r) => r.u);
+  if (users.length > 1) console.error(`strata: the index holds several accounts (${users.join(', ')}); pass --user <name> or the figures mix people`);
+}
 if (cmd === 'ingest') out(ingest(db, root));
 else if (cmd === 'coverage') out(coverage(db));
 else if (cmd === 'status') out({ db: dbPath, events: db.prepare('SELECT count(*) n FROM events').get().n, files: db.prepare('SELECT count(*) n FROM files').get().n, rotated: db.prepare("SELECT count(*) n FROM files WHERE status='rotated'").get().n });
 else if (cmd === 'verify') out(verify(db));
-else if (cmd === 'sample') out(sample(db, { n: Number(opt.n || 20), repo: opt.repo }));
+else if (cmd === 'sample') out(sample(db, { n: Number(opt.n || 20), repo: opt.repo, user: opt.user }));
 else if (cmd === 'canary') { const r = canary(db, { days: Number(opt.days || 14) }); out(r); if (!r.ok) process.exit(1); }
-else if (cmd === 'export') out(exportCounts(db, { repo: opt.repo }));
+else if (cmd === 'export') out(exportCounts(db, { repo: opt.repo, user: opt.user }));
 else if (cmd === 'query') {
   const name = pos[0];
   if (name === 'human-minutes-per-merged-pr') {
     const idle = opt['idle-min'] ? Number(opt['idle-min']) : 5;
-    const r = humanMinutes(db, { idle, repo: opt.repo, by: opt.by });
-    const others = [2, 5, 15].filter((x) => x !== idle).map((x) => { const s = humanMinutes(db, { idle: x, repo: opt.repo }).summary; return { idle_min: x, active_min_per_pr: s.active_min_per_pr, trimmed_mean_active_min: s.trimmed_mean_active_min }; });
+    const r = humanMinutes(db, { idle, repo: opt.repo, user: opt.user, by: opt.by });
+    const others = [2, 5, 15].filter((x) => x !== idle).map((x) => { const s = humanMinutes(db, { idle: x, repo: opt.repo, user: opt.user }).summary; return { idle_min: x, active_min_per_pr: s.active_min_per_pr, trimmed_mean_active_min: s.trimmed_mean_active_min }; });
     out(opt.rows ? { ...r, sensitivity: others } : { summary: r.summary, sensitivity: others });
-  } else if (name === 'interventions-per-100-calls') out(interventions(db, { repo: opt.repo }));
-  else if (name === 'missions') out(missions(db, { repo: opt.repo }).map((m) => ({ id: m.id, sessions: m.sessions.length, joins: m.joins })));
+  } else if (name === 'interventions-per-100-calls') out(interventions(db, { repo: opt.repo, user: opt.user }));
+  else if (name === 'missions') out(missions(db, { repo: opt.repo, user: opt.user }).map((m) => ({ id: m.id, sessions: m.sessions.length, joins: m.joins })));
   else { console.error(`unknown query ${name}\n${help}`); process.exit(2); }
 } else if (cmd === 'snapshot') {
   let list;
