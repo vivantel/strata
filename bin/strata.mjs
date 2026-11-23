@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { open } from '../src/db.mjs';
 import { ingest } from '../src/ingest.mjs';
-import { humanMinutes, interventions, coverage, exportCounts, missions, likeOf } from '../src/queries.mjs';
+import { humanMinutes, interventions, coverage, exportCounts, missions, likeOf, setAlias, aliasesOf } from '../src/queries.mjs';
 import { verify, sample, canary } from '../src/checks.mjs';
 
 const args = process.argv.slice(2);
@@ -37,6 +37,7 @@ const help = `strata <command>
   export [--repo R]                      counts and flags only, no message text
   verify                                 every log line has an event, or is a counted duplicate
   canary [--days N]                      exit 1 if recent logs hold an unclassified event type (format drift)
+  alias OLD NEW | alias --clear OLD   a renamed repo: links naming OLD count as NEW (links are not rewritten)
   sample [--n 20] [--repo R]             ids and counts for the owner's hand check, no text
   status
 
@@ -52,7 +53,8 @@ if (opt.user && ['query', 'export', 'sample'].includes(cmd) && !db.prepare("SELE
   console.error(`strata: no indexed file sits under .../archive/${opt.user}/ (--user needs an archive laid out as archive/<user>/; check the name and the archive path)`);
   process.exit(2);
 }
-if (cmd === 'ingest') out(ingest(db, root));
+if (cmd === 'alias') out(opt.clear ? setAlias(db, opt.clear, null) : pos[0] ? setAlias(db, pos[0], pos[1]) : aliasesOf(db));
+else if (cmd === 'ingest') out(ingest(db, root));
 else if (cmd === 'coverage') out(coverage(db));
 else if (cmd === 'status') out({ db: dbPath, events: db.prepare('SELECT count(*) n FROM events').get().n, files: db.prepare('SELECT count(*) n FROM files').get().n, rotated: db.prepare("SELECT count(*) n FROM files WHERE status='rotated'").get().n });
 else if (cmd === 'verify') out(verify(db));

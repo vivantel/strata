@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open } from '../src/db.mjs';
 import { ingest } from '../src/ingest.mjs';
-import { humanMinutes, interventions, coverage, exportCounts, missions, likeOf } from '../src/queries.mjs';
+import { humanMinutes, interventions, coverage, exportCounts, missions, likeOf, setAlias } from '../src/queries.mjs';
 
 const T0 = Date.parse('2026-11-02T10:00:00Z');
 const at = (min) => new Date(T0 + min * 60000).toISOString();
@@ -164,6 +164,23 @@ test('the CLI refuses a non-numeric option and a --user that matches no archive 
   const nobody = run('query', 'human-minutes-per-merged-pr', '--user', 'bob');
   assert.equal(nobody.status, 2);
   assert.match(nobody.stderr, /no indexed file sits under/);
+});
+
+test('a repo alias makes links under the old name count as the new repo, without rewriting them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'strata-'));
+  const S = 'cccccccc-0000-4000-8000-000000000003', S2 = 'dddddddd-0000-4000-8000-000000000004';
+  const mk = (sid, repo, t) => [
+    { type: 'user', uuid: `u-${sid}`, sessionId: sid, timestamp: at(t), message: { role: 'user', content: 'hi' } },
+    { type: 'pr-link', sessionId: sid, prNumber: 5, prRepository: repo, timestamp: at(t + 1) }];
+  writeFileSync(join(root, `${S}.jsonl`), lines(mk(S, 'o/old', 0)));
+  writeFileSync(join(root, `${S2}.jsonl`), lines(mk(S2, 'o/new', 100)));
+  const db = open(':memory:'); ingest(db, root);
+  assert.equal(humanMinutes(db, { idle: 5 }).summary.prs, 2);
+  setAlias(db, 'o/old', 'o/new');
+  assert.equal(humanMinutes(db, { idle: 5 }).summary.prs, 1);
+  assert.equal(db.prepare("SELECT count(*) n FROM events WHERE pr_repo='o/old'").get().n, 1);
+  setAlias(db, 'o/old', null);
+  assert.equal(humanMinutes(db, { idle: 5 }).summary.prs, 2);
 });
 
 test('a file outside the current root is not rotated; a vanished one is, and a returned one is ok again', () => {

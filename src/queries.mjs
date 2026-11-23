@@ -6,6 +6,20 @@ export const PROMPT_FLOOR_MIN = 1;  // prompt-weighted proxy: floor per owner pr
 export const PROMPT_SEC_PER_20 = 1; // ... plus 1 s per 20 characters ...
 export const PROMPT_CAP_MIN = 5;    // ... capped
 
+// Repo aliases: a repository renamed after links were written. Stored in the index (meta 'repo_aliases', JSON old->new);
+// links are never rewritten, the alias applies only when a PR key is built.
+export function aliasesOf(db) {
+  const r = db.prepare("SELECT value FROM meta WHERE key='repo_aliases'").get();
+  return r ? JSON.parse(r.value) : {};
+}
+export function setAlias(db, from, to) {
+  const a = aliasesOf(db);
+  if (to == null) delete a[from]; else a[from] = to;
+  db.prepare("INSERT OR REPLACE INTO meta VALUES('repo_aliases', ?)").run(JSON.stringify(a));
+  return a;
+}
+const prKey = (al, repo, num) => `${al[repo] ?? repo}#${num}`;
+
 // ---- missions: sessions joined by structured links (design amendment 1) ----
 // LIKE pattern for a literal substring: % _ and \ in the text are not wildcards (use with ESCAPE '\').
 export const likeOf = (t) => `%${String(t).replace(/[\\%_]/g, '\\$&')}%`;
@@ -31,7 +45,7 @@ export function missions(db, { repo, user } = {}) {
     for (const t of String(r.link_to).split(',')) join(r.s, t, r.type);
   const byPr = new Map();
   for (const r of db.prepare('SELECT DISTINCT session_id s, pr_repo, pr_num FROM events WHERE pr_num IS NOT NULL').all()) {
-    const k = `${r.pr_repo}#${r.pr_num}`; if (byPr.has(k)) join(r.s, byPr.get(k), 'shared-pr'); else byPr.set(k, r.s);
+    const k = prKey(aliasesOf(db), r.pr_repo, r.pr_num); if (byPr.has(k)) join(r.s, byPr.get(k), 'shared-pr'); else byPr.set(k, r.s);
   }
   const byBranch = new Map();
   for (const [id, m] of sess) {
@@ -61,9 +75,9 @@ function linkCursor(links) {
 }
 
 // Per-session PR attribution: interval -> PR in force (most recent earlier pr-link, else first link).
-function sessionIntervals(db, sid, idleMs) {
+function sessionIntervals(db, sid, idleMs, al = aliasesOf(db)) {
   const ev = db.prepare('SELECT ts,type,pr_repo,pr_num,owner_prompt,prompt_len,interrupted,rejected,perm FROM events WHERE session_id=? AND ts IS NOT NULL ORDER BY ts').all(sid);
-  const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: `${e.pr_repo}#${e.pr_num}` }));
+  const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: prKey(al, e.pr_repo, e.pr_num) }));
   const distinct = new Set(links.map((l) => l.key));
   const out = [];
   const at = linkCursor(links);
@@ -83,12 +97,13 @@ function weekOf(ms) { const d = new Date(ms); const t = Date.UTC(d.getUTCFullYea
 
 // human-minutes-per-merged-pr: per PR, idle-gap union plus the side-by-side proxies.
 export function humanMinutes(db, { idle = IDLE_MIN, repo, user, by } = {}) {
+  const al = aliasesOf(db);
   const idleMs = idle * 60000;
   const perPr = new Map();
   const get = (k) => perPr.get(k) || perPr.set(k, { pr: k, iv: [], eq: 0, flagged: [], prompts: 0, approvals: 0, rejections: 0, interruptions: 0, promptMin: 0, first: null, last: null, sessions: new Set() }).get(k);
   for (const m of missions(db, { repo, user })) {
     for (const sid of m.sessions) {
-      const { ev, out, distinct } = sessionIntervals(db, sid, idleMs);
+      const { ev, out, distinct } = sessionIntervals(db, sid, idleMs, al);
       for (const x of out) {
         const p = get(x.key); p.iv.push([x.s, x.e]); if (x.flag) p.flagged.push([x.s, x.e]);
         // sensitivity: equal split across every PR the session links
@@ -96,7 +111,7 @@ export function humanMinutes(db, { idle = IDLE_MIN, repo, user, by } = {}) {
         for (const k of targets) get(k).eq += (x.e - x.s) / 60000 / targets.length;
       }
       // proxies and wall clock are attributed to the PR in force at the event
-      const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: `${e.pr_repo}#${e.pr_num}` }));
+      const links = ev.filter((e) => e.pr_num != null).map((e) => ({ ts: e.ts, key: prKey(al, e.pr_repo, e.pr_num) }));
       const at = linkCursor(links);
       for (const e of ev) {
         const key = links.length ? at(e.ts) : 'no-pr';
