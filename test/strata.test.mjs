@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open } from '../src/db.mjs';
@@ -127,4 +128,40 @@ test('export holds no message text', () => {
   assert.ok(!s.includes(MARK));
   assert.ok(!s.includes('please do'));
   assert.ok(!s.includes(root));
+});
+
+test('a rejected call is counted when the tool result content is an array of text blocks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'strata-'));
+  const S = 'cccccccc-0000-4000-8000-000000000003';
+  writeFileSync(join(root, `${S}.jsonl`), lines([
+    { type: 'assistant', uuid: 'a1', sessionId: S, timestamp: at(0), message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash' }] } },
+    { type: 'user', uuid: 'u1', sessionId: S, timestamp: at(1), message: { content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: [{ type: 'text', text: "The user doesn't want to proceed" }] }] } },
+  ]));
+  const db = open(':memory:');
+  ingest(db, root);
+  assert.equal(interventions(db).signals, 1);
+});
+
+test('a snapshot that misses a linked PR reports how many PRs it left out', () => {
+  const { root, db } = setup();
+  ingest(db, root);
+  db.prepare('INSERT INTO prs(repo,num,state,merged_at) VALUES(?,?,?,?)').run('o/other', 1, 'MERGED', T0);
+  const { summary } = humanMinutes(db, { idle: 5 });
+  assert.equal(summary.prs, 0);
+  assert.equal(summary.unsnapshotted_prs, 1);
+  assert.match(summary.warning, /1 linked PRs are not in the gh snapshot/);
+});
+
+test('the CLI refuses a non-numeric option and a --user that matches no archive folder', () => {
+  const { root } = setup();
+  const dbf = join(root, 'i.sqlite');
+  const run = (...a) => spawnSync(process.execPath, [new URL('../bin/strata.mjs', import.meta.url).pathname, ...a, '--db', dbf], { encoding: 'utf8' });
+  assert.equal(run('ingest', '--root', root).status, 0);
+  const bad = run('sample', '--n', 'abc');
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /--n needs a positive number/);
+  assert.equal(run('query', 'human-minutes-per-merged-pr', '--idle-min').status, 2);
+  const nobody = run('query', 'human-minutes-per-merged-pr', '--user', 'bob');
+  assert.equal(nobody.status, 2);
+  assert.match(nobody.stderr, /no indexed file sits under/);
 });

@@ -77,8 +77,9 @@ export function normalize(o) {
   if (o.type === 'user' && o.permissionDecision) row.perm = o.permissionDecision.decision ?? 'unknown';
   if (o.type === 'user') {
     for (const b of blocks(o.message?.content)) {
-      if (b?.type === 'tool_result' && b.is_error && typeof b.content === 'string'
-        && /doesn't want to proceed|was rejected|user rejected/i.test(b.content)) row.rejected = 1;
+      // content is a string, or an array of text blocks
+      const text = typeof b?.content === 'string' ? b.content : Array.isArray(b?.content) ? b.content.map((x) => (typeof x?.text === 'string' ? x.text : '')).join('\n') : '';
+      if (b?.type === 'tool_result' && b.is_error && /doesn't want to proceed|was rejected|user rejected/i.test(text)) row.rejected = 1;
     }
   }
   if (Array.isArray(o.hookErrors) && o.hookErrors.length) row.hook_err = o.hookErrors.length;

@@ -118,10 +118,12 @@ export function humanMinutes(db, { idle = IDLE_MIN, repo, user, by } = {}) {
   const prRows = rows.filter((r) => r.pr !== 'no-pr');
   const haveSnap = snap.size > 0;
   const denom = haveSnap ? prRows.filter((r) => r.merged) : prRows;
+  // With a snapshot, a PR the snapshot does not hold has unknown merge state and is not counted: say how many.
+  const unsnapshotted = haveSnap ? prRows.filter((r) => r.merged === null).length : 0;
   const sum = (a, f) => a.reduce((x, r) => x + r[f], 0);
   const summary = {
     idle_min: idle, denominator: haveSnap ? 'merged PRs (gh snapshot)' : 'PRs linked (no gh snapshot; merge state unknown)',
-    prs: denom.length, active_min_total: round(sum(denom, 'active_min')),
+    prs: denom.length, ...(haveSnap && { unsnapshotted_prs: unsnapshotted, ...(unsnapshotted && { warning: `${unsnapshotted} linked PRs are not in the gh snapshot (other repos, or past its 1000-PR limit) and are not counted` }) }), active_min_total: round(sum(denom, 'active_min')),
     active_min_per_pr: denom.length ? round(sum(denom, 'active_min') / denom.length) : null,
     trimmed_mean_active_min: round(trimmedMean(denom.map((r) => r.active_min), 0.1)),
     flagged_share: sum(denom, 'active_min') ? round(sum(denom, 'flagged_min') / sum(denom, 'active_min')) : null,
