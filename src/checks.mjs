@@ -1,6 +1,6 @@
 // Checks that nothing is lost, a sample for the owner's hand check, and the format-drift canary.
 import { KNOWN_TYPES, IGNORED_TYPES } from './adapter-claude.mjs';
-import { missions } from './queries.mjs';
+import { missions, humanMinutes } from './queries.mjs';
 
 // Does every line of every file have a home in the index?
 export function verify(db) {
@@ -34,7 +34,13 @@ export function sample(db, { n = 20, seed = 7, repo, user } = {}) {
   const multi = ms.filter((m) => m.prs > 1), single = ms.filter((m) => m.prs <= 1);
   const half = Math.ceil(n / 2);
   const a = pick(multi, half);
-  return { episodes: [...a, ...pick(single, n - a.length)] };
+  // PRs for the denominator check: merged ones when a gh snapshot exists, with the merge state the query used.
+  const { rows } = humanMinutes(db, { repo, user });
+  const prs = rows.filter((r) => r.pr !== 'no-pr');
+  const have = prs.some((r) => r.merged !== null);
+  const pool = have ? prs.filter((r) => r.merged !== null) : prs;
+  const picked = pick(pool, n).map((r) => ({ pr: r.pr, merged: r.merged, sessions: r.sessions, active_min: r.active_min, prompts: r.prompts, week: r.week }));
+  return { episodes: [...a, ...pick(single, n - a.length)], prs: picked };
 }
 
 // Format drift: unclassified event types in logs from the last `days`.

@@ -57,3 +57,9 @@ test('sample returns ids and counts, no text', () => {
   const s = JSON.stringify(sample(setup(), { n: 5 }));
   assert.ok(!s.includes('start') && !s.includes('more'));
 });
+
+test('sample lists PRs with their merge state and no text', () => {
+  const r = sample(setup(), { n: 5 });
+  assert.ok(r.prs.length > 0 && r.prs.every((x) => /#\d+$/.test(x.pr) && 'merged' in x));
+  assert.ok(!JSON.stringify(r).includes('more'));
+});
