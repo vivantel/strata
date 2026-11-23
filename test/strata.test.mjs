@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, appendFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open } from '../src/db.mjs';
 import { ingest } from '../src/ingest.mjs';
-import { humanMinutes, interventions, coverage, exportCounts, missions } from '../src/queries.mjs';
+import { humanMinutes, interventions, coverage, exportCounts, missions, likeOf } from '../src/queries.mjs';
 
 const T0 = Date.parse('2026-11-02T10:00:00Z');
 const at = (min) => new Date(T0 + min * 60000).toISOString();
@@ -164,4 +164,56 @@ test('the CLI refuses a non-numeric option and a --user that matches no archive 
   const nobody = run('query', 'human-minutes-per-merged-pr', '--user', 'bob');
   assert.equal(nobody.status, 2);
   assert.match(nobody.stderr, /no indexed file sits under/);
+});
+
+test('a file outside the current root is not rotated; a vanished one is, and a returned one is ok again', () => {
+  const r1 = mkdtempSync(join(tmpdir(), 'strata-')), r2 = mkdtempSync(join(tmpdir(), 'strata-'));
+  const S1 = 'dddddddd-0000-4000-8000-000000000004', S2 = 'eeeeeeee-0000-4000-8000-000000000005';
+  const f1 = join(r1, `${S1}.jsonl`);
+  writeFileSync(f1, lines([{ type: 'user', uuid: 'x1', sessionId: S1, timestamp: at(0), message: { role: 'user', content: 'a' } }]));
+  writeFileSync(join(r2, `${S2}.jsonl`), lines([{ type: 'user', uuid: 'y1', sessionId: S2, timestamp: at(0), message: { role: 'user', content: 'b' } }]));
+  const db = open(':memory:');
+  const rotated = () => db.prepare("SELECT count(*) n FROM files WHERE status='rotated'").get().n;
+  ingest(db, r1); ingest(db, r2); ingest(db, r1);
+  assert.equal(rotated(), 0, 'files that still exist elsewhere are not rotated');
+  const saved = join(r1, 'saved.txt');
+  writeFileSync(saved, lines([{ type: 'user', uuid: 'x1', sessionId: S1, timestamp: at(0), message: { role: 'user', content: 'a' } }]));
+  rmSync(f1);
+  ingest(db, r1);
+  assert.equal(rotated(), 1, 'a vanished file is rotated');
+  writeFileSync(f1, readFileSyncText(saved));
+  ingest(db, r1);
+  assert.equal(rotated(), 0, 'a file that returns unchanged is ok again');
+});
+const readFileSyncText = (p) => readFileSync(p, 'utf8');
+
+test('--user finds a session whose events deduped to a file outside that account; LIKE text is literal', () => {
+  const root = mkdtempSync(join(tmpdir(), 'strata-'));
+  mkdirSync(join(root, 'live')); mkdirSync(join(root, 'archive/bob'), { recursive: true });
+  const S = 'ffffffff-0000-4000-8000-000000000006';
+  const body = lines([{ type: 'user', uuid: 'q1', sessionId: S, timestamp: at(0), cwd: '/r', message: { role: 'user', content: 'hi' } }, { type: 'pr-link', sessionId: S, prNumber: 3, prRepository: 'o/y', timestamp: at(1) }]);
+  writeFileSync(join(root, 'live', `${S}.jsonl`), body);
+  writeFileSync(join(root, 'archive/bob', `${S}.jsonl`), body);
+  const db = open(':memory:');
+  ingest(db, join(root, 'live')); ingest(db, join(root, 'archive'));
+  assert.equal(missions(db, { user: 'bob' }).length, 1, 'the archive copy counts even though its events deduped');
+  assert.equal(missions(db, { user: 'b_b' }).length, 0, '_ is not a wildcard');
+  assert.equal(likeOf('a_b%c\\d'), '%a\\_b\\%c\\\\d%');
+});
+
+test('a log rewritten to a longer file with the same first 4 KiB is read again, not appended to', () => {
+  const root = mkdtempSync(join(tmpdir(), 'strata-'));
+  const S = '99999999-0000-4000-8000-000000000007';
+  const pad = 'p'.repeat(5000);
+  const ev = (u, c) => ({ type: 'user', uuid: u, sessionId: S, timestamp: at(0), message: { role: 'user', content: c } });
+  const f = join(root, `${S}.jsonl`);
+  writeFileSync(f, lines([ev('a1', pad), ev('a2', 'old second')]));
+  const db = open(':memory:');
+  ingest(db, root);
+  assert.equal(db.prepare('SELECT count(*) n FROM events').get().n, 2);
+  // same head (the 5000-byte first event), different and longer tail
+  writeFileSync(f, lines([ev('a1', pad), ev('b2', 'new second, rewritten and longer than before'), ev('b3', 'third')]));
+  ingest(db, root);
+  const uuids = db.prepare('SELECT uuid FROM events ORDER BY line_no').all().map((r) => r.uuid);
+  assert.deepEqual(uuids, ['a1', 'b2', 'b3'], 'stale events from the old content are gone');
 });

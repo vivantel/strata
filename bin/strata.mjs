@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { open } from '../src/db.mjs';
 import { ingest } from '../src/ingest.mjs';
-import { humanMinutes, interventions, coverage, exportCounts, missions } from '../src/queries.mjs';
+import { humanMinutes, interventions, coverage, exportCounts, missions, likeOf } from '../src/queries.mjs';
 import { verify, sample, canary } from '../src/checks.mjs';
 
 const args = process.argv.slice(2);
@@ -48,7 +48,7 @@ if (!opt.user && ['query', 'export', 'sample'].includes(cmd)) {
   const users = db.prepare("SELECT DISTINCT substr(path, instr(path,'/archive/')+9, instr(substr(path, instr(path,'/archive/')+9),'/')-1) u FROM files WHERE path LIKE '%/archive/%'").all().map((r) => r.u);
   if (users.length > 1) console.error(`strata: the index holds several accounts (${users.join(', ')}); pass --user <name> or the figures mix people`);
 }
-if (opt.user && ['query', 'export', 'sample'].includes(cmd) && !db.prepare('SELECT 1 FROM files WHERE path LIKE ? LIMIT 1').get(`%/archive/${opt.user}/%`)) {
+if (opt.user && ['query', 'export', 'sample'].includes(cmd) && !db.prepare("SELECT 1 FROM files WHERE path LIKE ? ESCAPE '\\' LIMIT 1").get(likeOf(`/archive/${opt.user}/`))) {
   console.error(`strata: no indexed file sits under .../archive/${opt.user}/ (--user needs an archive laid out as archive/<user>/; check the name and the archive path)`);
   process.exit(2);
 }

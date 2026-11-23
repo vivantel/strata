@@ -7,12 +7,15 @@ export const PROMPT_SEC_PER_20 = 1; // ... plus 1 s per 20 characters ...
 export const PROMPT_CAP_MIN = 5;    // ... capped
 
 // ---- missions: sessions joined by structured links (design amendment 1) ----
+// LIKE pattern for a literal substring: % _ and \ in the text are not wildcards (use with ESCAPE '\').
+export const likeOf = (t) => `%${String(t).replace(/[\\%_]/g, '\\$&')}%`;
+
 export function missions(db, { repo, user } = {}) {
   const sess = new Map(); // id -> {repo, branch}
   for (const r of db.prepare(`SELECT session_id s, max(cwd) cwd, max(CASE WHEN branch IS NOT NULL THEN branch END) br
       FROM events WHERE session_id IS NOT NULL GROUP BY session_id`).all()) sess.set(r.s, { cwd: r.cwd, branch: r.br });
   if (user) { // the archive keeps each account's logs apart: archive/<user>/...
-    const mine = new Set(db.prepare('SELECT DISTINCT session_id s FROM events WHERE file LIKE ?').all(`%/archive/${user}/%`).map((r) => r.s));
+    const mine = new Set(db.prepare("SELECT DISTINCT session_id s FROM session_files WHERE file LIKE ? ESCAPE '\\'").all(likeOf(`/archive/${user}/`)).map((r) => r.s));
     for (const id of [...sess.keys()]) if (!mine.has(id)) sess.delete(id);
   }
   const parent = new Map([...sess.keys()].map((k) => [k, k]));
@@ -39,7 +42,7 @@ export function missions(db, { repo, user } = {}) {
   const groups = new Map();
   for (const id of sess.keys()) { const r = find(id); (groups.get(r) || groups.set(r, []).get(r)).push(id); }
   let out = [...groups.entries()].map(([root, ids]) => ({ id: root, sessions: ids, joins: causes.get(root) || {} }));
-  if (repo) { const rows = db.prepare('SELECT DISTINCT session_id s FROM events WHERE pr_repo LIKE ? OR cwd LIKE ?').all(`%${repo}%`, `%${repo}%`); const ok = new Set(rows.map((r) => r.s)); out = out.filter((m) => m.sessions.some((s) => ok.has(s))); }
+  if (repo) { const rows = db.prepare("SELECT DISTINCT session_id s FROM events WHERE pr_repo LIKE ? ESCAPE '\\' OR cwd LIKE ? ESCAPE '\\'").all(likeOf(repo), likeOf(repo)); const ok = new Set(rows.map((r) => r.s)); out = out.filter((m) => m.sessions.some((s) => ok.has(s))); }
   return out;
 }
 

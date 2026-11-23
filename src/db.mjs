@@ -3,13 +3,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS files(
   path TEXT PRIMARY KEY, size INTEGER, prefix_hash TEXT, prefix_len INTEGER, byte_offset INTEGER,
-  lines INTEGER, status TEXT);
+  lines INTEGER, status TEXT, tail_hash TEXT, tail_len INTEGER);
+CREATE TABLE IF NOT EXISTS session_files(session_id TEXT, file TEXT, PRIMARY KEY(session_id, file));  -- which files hold a session, kept even when its events dedupe to another file
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, file TEXT, line_no INTEGER, byte_offset INTEGER,
   session_id TEXT, uuid TEXT, hash TEXT, type TEXT, kind TEXT, ts INTEGER,
