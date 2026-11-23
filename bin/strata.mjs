@@ -33,7 +33,7 @@ const help = `strata <command>
   query human-minutes-per-merged-pr [--repo R] [--user U] [--idle-min N] [--by week] [--rows]
   query interventions-per-100-calls [--repo R]
   query missions [--repo R]
-  snapshot --file prs.json | --gh REPO   merge state per PR (the only network use is --gh)
+  snapshot --file prs.json | --gh REPO [--limit N]   merge state per PR (the only network use is --gh)
   export [--repo R]                      counts and flags only, no message text
   verify                                 every log line has an event, or is a counted duplicate
   canary [--days N]                      exit 1 if recent logs hold an unclassified event type (format drift)
@@ -73,7 +73,7 @@ else if (cmd === 'query') {
   let list;
   if (opt.file) list = JSON.parse(readFileSync(opt.file, 'utf8'));
   else if (opt.gh) {
-    const raw = execFileSync('gh', ['pr', 'list', '-R', opt.gh, '--state', 'all', '--limit', '1000', '--json', 'number,state,additions,deletions,mergedAt'], { encoding: 'utf8' });
+    const raw = execFileSync('gh', ['pr', 'list', '-R', opt.gh, '--state', 'all', '--limit', String(num('limit', 5000)), '--json', 'number,state,additions,deletions,mergedAt'], { encoding: 'utf8' });
     list = JSON.parse(raw).map((p) => ({ repo: opt.gh, ...p }));
   } else { console.error('snapshot needs --file or --gh'); process.exit(2); }
   const ins = db.prepare('INSERT OR REPLACE INTO prs(repo,num,state,additions,deletions,merged_at,ci,reverted) VALUES(?,?,?,?,?,?,?,?)');
