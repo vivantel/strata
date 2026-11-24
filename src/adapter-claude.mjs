@@ -39,7 +39,7 @@ export const isDefaultBranch = (b) => DEFAULT_BRANCHES.has(b || '');
 
 const blocks = (c) => (Array.isArray(c) ? c : []);
 
-function humanText(o) {
+export function humanText(o) {
   if (o.type !== 'user' || o.isMeta || o.isSidechain) return null;
   const c = o.message?.content;
   let text = null;

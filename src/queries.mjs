@@ -1,5 +1,5 @@
 // Named queries. Rules here are fixed by docs/decisions/2026-11-22-strata-design.md before any baseline is read.
-import { KNOWN_TYPES, IGNORED_TYPES, isDefaultBranch } from './adapter-claude.mjs';
+import { KNOWN_TYPES, IGNORED_TYPES, isDefaultBranch, humanText } from './adapter-claude.mjs';
 
 export const IDLE_MIN = 5;          // design: primary idle threshold; 2 and 15 always reported
 export const PROMPT_FLOOR_MIN = 1;  // prompt-weighted proxy: floor per owner prompt ...
@@ -23,6 +23,22 @@ const prKey = (al, repo, num) => `${al[repo] ?? repo}#${num}`;
 // ---- missions: sessions joined by structured links (design amendment 1) ----
 // LIKE pattern for a literal substring: % _ and \ in the text are not wildcards (use with ESCAPE '\').
 export const likeOf = (t) => `%${String(t).replace(/[\\%_]/g, '\\$&')}%`;
+
+
+// A kickoff prompt that names a plan or file ("proceed with docs/plans/x.md") joins sessions of the same
+// repository checkout. The join key is that path token only, never the verb or any other words; the text
+// stays in the local index. A path named by more than KICKOFF_MAX_SESSIONS sessions, or a shared project
+// file such as AGENTS.md, is too common to identify a mission and joins nothing.
+const KICKOFF_MAX_SESSIONS = 8;
+const KICKOFF_COMMON = new Set(['agents.md', 'claude.md', 'readme.md', 'package.json', 'changelog.md']);
+const TARGET_RE = /(?<![\w./-])((?:[\w.-]+\/)+[\w.-]+\.(?:md|mjs|js|ts|json|ya?ml))(?![\w/-])/g;
+export function kickoffTarget(text) {
+  for (const m of String(text).matchAll(TARGET_RE)) {
+    const t = m[1].replace(/^\.\//, '');
+    if (!KICKOFF_COMMON.has(t.split('/').pop().toLowerCase())) return t;
+  }
+  return null;
+}
 
 export function missions(db, { repo, user } = {}) {
   const sess = new Map(); // id -> {repo, branch}
@@ -53,6 +69,17 @@ export function missions(db, { repo, user } = {}) {
     const k = `${m.cwd ? m.cwd.split('/wt-')[0] : ''}|${m.branch}`;
     if (byBranch.has(k)) join(id, byBranch.get(k), 'shared-branch'); else byBranch.set(k, id);
   }
+  const byTarget = new Map(); // repo checkout | path -> sessions whose first prompt names the path
+  for (const r of db.prepare(`SELECT e.session_id s, r.raw raw FROM events e JOIN raw_events r ON r.event_id = e.id
+      WHERE e.owner_prompt = 1 AND e.ts = (SELECT min(x.ts) FROM events x WHERE x.session_id = e.session_id AND x.owner_prompt = 1)
+      GROUP BY e.session_id`).all()) {
+    const m = sess.get(r.s); if (!m) continue;
+    let o; try { o = JSON.parse(r.raw); } catch { continue; }
+    const t = kickoffTarget(humanText(o) ?? ''); if (!t) continue;
+    const k = `${m.cwd ? m.cwd.split('/wt-')[0] : ''}|${t}`;
+    (byTarget.get(k) || byTarget.set(k, []).get(k)).push(r.s);
+  }
+  for (const ids of byTarget.values()) if (ids.length > 1 && ids.length <= KICKOFF_MAX_SESSIONS) for (const id of ids.slice(1)) join(id, ids[0], 'shared-kickoff-target');
   const groups = new Map();
   for (const id of sess.keys()) { const r = find(id); (groups.get(r) || groups.set(r, []).get(r)).push(id); }
   let out = [...groups.entries()].map(([root, ids]) => ({ id: root, sessions: ids, joins: causes.get(root) || {} }));

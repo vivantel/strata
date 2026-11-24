@@ -234,3 +234,24 @@ test('a log rewritten to a longer file with the same first 4 KiB is read again, 
   const uuids = db.prepare('SELECT uuid FROM events ORDER BY line_no').all().map((r) => r.uuid);
   assert.deepEqual(uuids, ['a1', 'b2', 'b3'], 'stale events from the old content are gone');
 });
+
+test('kickoff prompts naming the same plan path join sessions; the verb and common files do not', () => {
+  const root = mkdtempSync(join(tmpdir(), 'strata-'));
+  const ids = ['c1', 'c2', 'c3', 'c4'].map((x) => `${x}cccccc-0000-4000-8000-00000000000${x[1]}`);
+  const first = [
+    'proceed with docs/plans/x.md, step one',   // joins c2
+    'implement docs/plans/x.md next steps',      // joins c1
+    'proceed with AGENTS.md',                    // common file: joins nothing
+    'proceed with docs/plans/other.md'           // other path: stays apart
+  ];
+  ids.forEach((id, i) => writeFileSync(join(root, `${id}.jsonl`), lines([{ type: 'user', uuid: `k${i}`, sessionId: id, timestamp: at(i * 100), cwd: '/r', message: { role: 'user', content: first[i] } }])));
+  const db = open(':memory:');
+  ingest(db, root);
+  const ms = missions(db, {});
+  const group = (id) => ms.find((m) => m.sessions.includes(id));
+  assert.equal(group(ids[0]), group(ids[1]));
+  assert.deepEqual(group(ids[0]).joins, { 'shared-kickoff-target': 1 });
+  assert.notEqual(group(ids[2]), group(ids[0]));
+  assert.notEqual(group(ids[3]), group(ids[0]));
+  assert.equal(group(ids[2]).sessions.length, 1);
+});
