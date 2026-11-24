@@ -20,3 +20,9 @@ Reading the numbers:
 - `active_min` is the union of gaps between consecutive events no longer than the idle threshold. It counts time the agent works while the owner is attached, so it is an upper-side proxy; `prompts`, `prompt_weighted_min` and `wall_clock_min` sit beside it and are never blended into it.
 - Without a `gh` snapshot the denominator is "PRs linked", not "PRs merged".
 - `flagged_share` is the share of minutes in sessions that link more than one PR; those minutes are attributed to the PR most recently linked.
+
+## CI
+
+`.github/workflows/ci.yml` runs the tests on Node 22.13 and 24 on every push and weekly. Its canary step uses a synthetic log, so it checks that the command runs, not that Claude Code's log format has drifted: run `node bin/strata.mjs canary` against your own index for that. No real transcript belongs in this repository.
+
+License: MIT.

@@ -1,0 +1,27 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['22.13.0', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '${{ matrix.node }}' }
+      - run: npm test
+      # Smoke test of the canary command on a synthetic log. It proves the command runs on this
+      # Node; it cannot see Claude Code format drift, which needs real logs (run `strata canary` locally).
+      - name: canary smoke on a synthetic log
+        run: |
+          d=$(mktemp -d)
+          printf '%s\n' '{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"'"$(date -u +%FT%TZ)"'","message":{"role":"user","content":"hello"}}' > "$d/s1.jsonl"
+          node bin/strata.mjs ingest --root "$d" --db "$d/i.sqlite"
+          node bin/strata.mjs canary --db "$d/i.sqlite"

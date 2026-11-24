@@ -2,6 +2,8 @@
   "name": "strata",
   "version": "0.0.1",
   "private": true,
+  "license": "MIT",
+  "repository": "github:vivantel/strata",
   "type": "module",
   "description": "Local lossless index of agent sessions; reads the ecosystem outcome meters",
   "bin": { "strata": "bin/strata.mjs" },
