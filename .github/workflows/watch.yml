@@ -1,0 +1,46 @@
+name: watch
+# Daily check of public remote state that the strata readings depend on.
+# Local-log checks (fresh ingest, verify, canary) cannot run here: they need the owner's machine.
+# Output is check names and PASS/FAIL only. A failure opens or updates one issue; GitHub notifies the owner.
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+  actions: read
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: run checks
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fails=""; report=""
+          check() { # name, repo, workflow, branch
+            c=$(gh run list -R "$2" --workflow "$3" --branch "$4" --status completed --limit 1 --json conclusion -q '.[0].conclusion')
+            if [ "$c" = "success" ]; then report="$report"$'\n'"PASS $1"; else report="$report"$'\n'"FAIL $1 (${c:-no run})"; fails="$fails $1"; fi
+          }
+          check "strata ci on main" vivantel/strata ci main
+          check "virage dogfooding qa on master" vivantel/virage "Virage Dogfooding QA" master
+          today=$(date -u +%F)
+          d14=$(( ( $(date -ud 2026-12-08 +%s) - $(date -ud "$today" +%s) ) / 86400 ))
+          d28=$(( ( $(date -ud 2026-12-22 +%s) - $(date -ud "$today" +%s) ) / 86400 ))
+          report="$report"$'\n'"INFO days to day-14 reading: $d14; to day-28 reading: $d28"
+          report="$report"$'\n'"REMINDER run strata preflight locally (logs, verify, canary)"
+          echo "$report"
+          { echo "report<<EOF"; echo "$report"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+          echo "failed=${fails:+yes}" >> "$GITHUB_OUTPUT"
+      - name: open or update the watch issue on failure
+        if: steps.checks.outputs.failed == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.checks.outputs.report }}
+        run: |
+          gh label create watch -R "$GITHUB_REPOSITORY" --color d93f0b 2>/dev/null || true
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label watch --limit 1 --json number -q '.[0].number')
+          if [ -n "$n" ]; then gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "$REPORT"
+          else gh issue create -R "$GITHUB_REPOSITORY" --title "watch: a check failed" --label watch --body "$REPORT"; fi
